@@ -12,25 +12,35 @@ jobs:
     defaults:
       run:
         shell: pwsh
+    env:
+      APP_DIR: lyrisync_plus   # <-- your subfolder
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Confirm repo layout
+        run: |
+          Write-Host "PWD: $(Get-Location)"
+          Get-ChildItem -Force
+          Write-Host "Contents of $env:APP_DIR:"
+          if (!(Test-Path "$env:APP_DIR")) { throw "App directory '$env:APP_DIR' not found." }
+          Get-ChildItem -Force "$env:APP_DIR"
+
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        working-directory: lyricsyn_plus
+        working-directory: ${{ env.APP_DIR }}
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
       - name: Build executable
-        working-directory: lyricsyn_plus
+        working-directory: ${{ env.APP_DIR }}
         run: |
           pyinstaller --noconsole --onefile main.py -n LyriSyncPlus `
             --add-data "splash.png;." `
@@ -43,4 +53,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: LyriSyncPlus-exe
-          path: lyricsyn_plus/dist/LyriSyncPlus.exe
+          path: ${{ env.APP_DIR }}/dist/LyriSyncPlus.exe
