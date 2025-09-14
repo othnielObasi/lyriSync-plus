@@ -13,7 +13,7 @@ jobs:
       run:
         shell: pwsh
     env:
-      APP_DIR: lyrisync_plus   # <-- your subfolder
+      APP_DIR: lyrisync_plus   # <-- your Python app folder
 
     steps:
       - name: Checkout code
@@ -47,7 +47,8 @@ jobs:
             --hidden-import ttkbootstrap `
             --hidden-import websockets `
             --hidden-import aiohttp `
-            --hidden-import yaml
+            --hidden-import yaml `
+            --hidden-import PIL
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
