@@ -1,1 +1,0 @@
-pyinstaller --onefile --windowed --icon=iconLyriSync.ico main.py
