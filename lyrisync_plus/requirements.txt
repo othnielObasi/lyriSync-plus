@@ -2,5 +2,5 @@ flask
 ttkbootstrap
 pyyaml
 requests
-websocket-client
+websockets
 pillow
