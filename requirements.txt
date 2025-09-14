@@ -1,6 +1,0 @@
-flask
-ttkbootstrap
-pyyaml
-requests
-websocket-client
-pillow
