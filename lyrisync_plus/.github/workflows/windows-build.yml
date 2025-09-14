@@ -1,0 +1,66 @@
+name: Windows Build (LyriSync+) — subfolder
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'lyrisync/**'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        working-directory: lyrisync
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if exist requirements.txt ( pip install -r requirements.txt )
+          pip install pyinstaller
+
+      - name: Build EXE with PyInstaller
+        run: |
+          pyinstaller LyriSyncPlus.spec
+          dir dist\LyriSyncPlus
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LyriSyncPlus-win
+          path: |
+            lyrisync/dist\LyriSyncPlus\LyriSyncPlus.exe
+            lyrisync/iconLyriSync.ico
+            lyrisync/splash.png
+            lyrisync/lyrisync_config.yaml
+            lyrisync/README.md
+
+      - name: Build Inno installer (optional)
+        shell: powershell
+        run: |
+          $inno = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (Test-Path $inno) {
+            & "$inno" installer_inno.iss
+            Write-Host "Built Inno installer."
+          } else {
+            Write-Host "Inno Setup not installed on runner; skipping."
+          }
+
+      - name: Upload Installer artifact (if any)
+        uses: actions/upload-artifact@v4
+        with:
+          name: LyriSyncPlus-installer
+          path: lyrisync/LyriSyncPlus-Setup.exe
+          if-no-files-found: ignore
