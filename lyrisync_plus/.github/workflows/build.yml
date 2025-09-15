@@ -1,66 +1,58 @@
-name: Windows Build (LyriSync+) — subfolder
+name: Build Windows Executable
 
 on:
-  workflow_dispatch:
   push:
     branches: [ main ]
-    paths:
-      - 'lyrisync/**'
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
-
     defaults:
       run:
-        working-directory: lyrisync
+        shell: pwsh
+    env:
+      APP_DIR: lyrisync_plus
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Confirm repo layout
+        run: |
+          Write-Host "PWD: $(Get-Location)"
+          Get-ChildItem -Force
+          Write-Host "Contents of $env:APP_DIR:"
+          if (!(Test-Path "$env:APP_DIR")) { throw "App directory '$env:APP_DIR' not found." }
+          Get-ChildItem -Force "$env:APP_DIR"
+
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          architecture: 'x64'
+          python-version: "3.11"
 
       - name: Install dependencies
+        working-directory: ${{ env.APP_DIR }}
         run: |
           python -m pip install --upgrade pip
-          if exist requirements.txt ( pip install -r requirements.txt )
+          pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build EXE with PyInstaller
+      - name: Show installed packages (debug)
+        working-directory: ${{ env.APP_DIR }}
         run: |
+          python -c "import pkgutil; print(sorted([m.name for m in pkgutil.iter_modules()]))"
+          python -c "import aiohttp, websockets, yaml, PIL; print('OK: aiohttp, websockets, yaml, PIL')"
+
+      - name: Build executable via spec
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          if (!(Test-Path "LyriSyncPlus.spec")) { throw "Missing LyriSyncPlus.spec in $env:APP_DIR" }
           pyinstaller LyriSyncPlus.spec
-          dir dist\LyriSyncPlus
 
-      - name: Upload EXE artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LyriSyncPlus-win
-          path: |
-            lyrisync/dist\LyriSyncPlus\LyriSyncPlus.exe
-            lyrisync/iconLyriSync.ico
-            lyrisync/splash.png
-            lyrisync/lyrisync_config.yaml
-            lyrisync/README.md
-
-      - name: Build Inno installer (optional)
-        shell: powershell
-        run: |
-          $inno = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (Test-Path $inno) {
-            & "$inno" installer_inno.iss
-            Write-Host "Built Inno installer."
-          } else {
-            Write-Host "Inno Setup not installed on runner; skipping."
-          }
-
-      - name: Upload Installer artifact (if any)
-        uses: actions/upload-artifact@v4
-        with:
-          name: LyriSyncPlus-installer
-          path: lyrisync/LyriSyncPlus-Setup.exe
-          if-no-files-found: ignore
+          name: LyriSyncPlus-exe
+          path: ${{ env.APP_DIR }}/dist/LyriSyncPlus/LyriSyncPlus.exe
