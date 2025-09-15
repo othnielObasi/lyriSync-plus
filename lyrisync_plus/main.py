@@ -5,7 +5,7 @@ import time
 import argparse
 import threading
 import asyncio
-from typing import Optional
+from typing import Optional, Awaitable
 
 from flask import Flask, request, jsonify
 import ttkbootstrap as tb
@@ -57,7 +57,7 @@ def soft_wrap(text: str, max_chars: int = 48) -> str:
     return line1 if not line2 else (line1 + "\n" + line2)
 
 
-def _submit(coro: asyncio.coroutine):
+def _submit(coro: Awaitable):
     """Submit a coroutine to the background loop."""
     return asyncio.run_coroutine_threadsafe(coro, loop)
 
@@ -73,16 +73,13 @@ async def ensure_always_on_overlay():
 
 async def handle_action_async(action):
     """Core async action handler (vMix operations)."""
-    # print for traceability
     print(f"[ACTION] → {action}")
 
-    # Set text (from GUI/API)
     if isinstance(action, tuple) and action[0] == "set_lyrics_text":
         with state_lock:
             app_state["lyrics"] = action[1]
         return
 
-    # Show lyrics
     if action == "show_lyrics":
         title_input = settings.get("vmix_title_input", "SongTitle")
         title_field = settings.get("vmix_title_field", "Message.Text")
@@ -105,14 +102,12 @@ async def handle_action_async(action):
                 pass
         return
 
-    # Clear lyrics
     if action == "clear_lyrics":
         title_input = settings.get("vmix_title_input", "SongTitle")
         title_field = settings.get("vmix_title_field", "Message.Text")
         await vmix.send_title_text(title_input, title_field, "")
         ch = int(settings.get("overlay_channel", 1))
         if settings.get("overlay_always_on", False):
-            # Overlay stays on-air; just blank text
             pass
         elif settings.get("auto_overlay_out_on_clear", True):
             try:
@@ -121,13 +116,11 @@ async def handle_action_async(action):
                 pass
         return
 
-    # Overlay toggle (In/Out behavior is internal to vMix)
     if action == "toggle_overlay":
         ch = int(settings.get("overlay_channel", 1))
         await vmix.trigger_overlay(ch)
         return
 
-    # Recording control
     if action == "start_recording":
         await vmix.start_recording()
         with state_lock:
@@ -317,15 +310,11 @@ def main():
     if args.nogui or headless_env:
         if headless_env and not args.nogui:
             print("[GUI] Headless environment detected (no display). Running without GUI.")
-        # No GUI; still run splash if requested? (skip)
         # Start Flask API thread
         api_thread = threading.Thread(target=run_api, args=(args.bind,), daemon=True)
         api_thread.start()
 
-        # Always-on overlay (if set)
         _submit(ensure_always_on_overlay())
-
-        # Start async tasks
         _submit(idle_watcher())
         _submit(health_watcher())
         _submit(poll_status())
@@ -346,25 +335,19 @@ def main():
             action_callback=lambda action: handle_action(action),
         )
 
-        # Splash (optional)
         if bool(settings.get("splash_enabled", True)) and show_splash:
             try:
                 show_splash("splash.png", duration_ms=1600)
             except Exception:
                 pass
 
-        # Start Flask in background
         threading.Thread(target=run_api, args=(args.bind,), daemon=True).start()
 
-        # Ensure always-on overlay
         _submit(ensure_always_on_overlay())
-
-        # Background async tasks
         _submit(idle_watcher())
         _submit(health_watcher())
         _submit(poll_status())
 
-        # Graceful shutdown
         def _on_close():
             shutdown_event.set()
             try:
@@ -385,13 +368,11 @@ def main():
         try:
             root.mainloop()
         finally:
-            # Ensure loop thread ends
             try:
                 loop.call_soon_threadsafe(loop.stop)
             except Exception:
                 pass
 
-    # Final cleanup
     shutdown_event.set()
     try:
         _submit(vmix.close())
@@ -402,7 +383,6 @@ def main():
     except Exception:
         pass
 
-    # Join loop thread
     if _loop_thread and _loop_thread.is_alive():
         _loop_thread.join(timeout=2)
 
