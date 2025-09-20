@@ -44,7 +44,7 @@ def _default_config() -> Dict[str, Any]:
             "auto_overlay_out_on_clear": True,
             "overlay_always_on": False,
             "auto_clear_idle_sec": 0,
-            "max_chars_per_line": 36,   # ↓ reduced default wrap length
+            "max_chars_per_line": 36,   # reduced default wrap length
             "clear_on_blank": True
         }
     }
@@ -149,11 +149,9 @@ class AsyncVmixDiscoverer:
 # =======================
 class LyriSyncGUI:
     """
-    Notes for this build:
-    - No status echo like "Action triggered: X".
-    - Buttons do not display extra text beyond their labels.
-    - Only errors are surfaced via dialogs.
-    - Top-right LEDs (OpenLP, vMix, Overlay, Recording) reflect state.
+    - No noisy 'Action triggered' echoes.
+    - Status LEDs (OpenLP, vMix, Overlay, Recording) reflect state.
+    - Test Lyrics box is a wide, short multi-line Text that auto-grows 2→6 lines.
     """
 
     def __init__(
@@ -336,29 +334,39 @@ class LyriSyncGUI:
         ttk.Button(btns, text="🔄 Refresh", command=self.refresh_roles_list).pack(side="left", padx=5)
 
     # -------------------
-    # Status tab
+    # Status tab (UPDATED: multi-line Test Lyrics box)
     # -------------------
     def _build_status_tab(self):
-        # Test controls
+        # Controls (with multi-line text)
         test = ttk.LabelFrame(self.status_frame, text="Controls", padding=10)
         test.pack(fill="x", padx=10, pady=(12, 8))
 
-        ttk.Label(test, text="Test Lyrics:").grid(row=0, column=0, sticky="w", pady=5)
-        self._lyrics_var = tk.StringVar(value="Sample lyrics")
-        # ↑ Wider entry box so more text is visible when typing
-        entry = ttk.Entry(test, textvariable=self._lyrics_var, width=80)
-        entry.grid(row=0, column=1, sticky="ew", padx=6, pady=5)
+        ttk.Label(test, text="Test Lyrics:").grid(row=0, column=0, sticky="nw", pady=5)
 
-        # Single, clear action: Show the text from the entry
-        ttk.Button(test, text="Show Lyrics", command=self._send_test_lyrics, bootstyle=SUCCESS).grid(
-            row=0, column=2, padx=6, pady=5
+        # Wide, short Text that auto-grows (2→6 lines)
+        self._lyrics_text = tk.Text(
+            test,
+            height=2,          # shorter initial height (2 lines)
+            width=100,         # ~2x wider than before
+            wrap="word",
+            undo=False
+        )
+        self._lyrics_text.grid(row=0, column=1, sticky="ew", padx=6, pady=5, columnspan=2)
+        self._lyrics_text.insert("1.0", "Sample lyrics")
+        self._min_lines = 2
+        self._max_lines = 6
+        self._lyrics_text.bind("<<Modified>>", self._on_lyrics_modified)
+
+        # Buttons
+        ttk.Button(test, text="Show Lyrics", command=self._send_test_lyrics, bootstyle=INFO).grid(
+            row=0, column=3, padx=6, pady=5, sticky="e"
         )
         ttk.Button(test, text="Clear", command=self._clear_lyrics, bootstyle=DANGER).grid(
-            row=0, column=3, padx=0, pady=5
+            row=0, column=4, padx=(0, 0), pady=5, sticky="e"
         )
 
         actions = ttk.Frame(test)
-        actions.grid(row=1, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        actions.grid(row=1, column=0, columnspan=5, sticky="w", pady=(10, 0))
 
         ttk.Button(actions, text="Toggle Overlay", command=lambda: self._trigger_action("toggle_overlay")).pack(
             side="left", padx=5
@@ -369,7 +377,6 @@ class LyriSyncGUI:
         ttk.Button(actions, text="Stop Recording", command=lambda: self._trigger_action("stop_recording"), bootstyle=DANGER).pack(
             side="left", padx=5
         )
-        # Removed the redundant 'Show Lyrics' action here that bypassed the entry text.
 
         # Connection status small labels
         conn = ttk.LabelFrame(self.status_frame, text="Connection Status", padding=10)
@@ -383,7 +390,25 @@ class LyriSyncGUI:
         self.openlp_status_var = tk.StringVar(value="Disconnected")
         ttk.Label(conn, textvariable=self.openlp_status_var, foreground="red").grid(row=0, column=3, sticky="w", padx=4)
 
-        test.columnconfigure(1, weight=1)
+        test.columnconfigure(1, weight=1)  # Text box expands
+        test.columnconfigure(2, weight=0)
+        test.columnconfigure(3, weight=0)
+        test.columnconfigure(4, weight=0)
+
+    def _on_lyrics_modified(self, _evt=None):
+        """Auto-resize Text widget height based on wrapped content (2..6 lines)."""
+        try:
+            self._lyrics_text.edit_modified(False)
+        except Exception:
+            pass
+        try:
+            last_index = self._lyrics_text.index("end-1c")
+            display_lines = int(last_index.split(".")[0])  # line part
+        except Exception:
+            display_lines = self._min_lines
+        new_height = max(self._min_lines, min(self._max_lines, display_lines))
+        if new_height != int(self._lyrics_text.cget("height")):
+            self._lyrics_text.configure(height=new_height)
 
     # -------------------
     # Actions (no status echo)
@@ -397,11 +422,17 @@ class LyriSyncGUI:
             logger.error("Action %s failed: %s", action, e)
             messagebox.showerror("Action Error", f"Failed to execute action '{action}':\n{e}")
 
+    def _get_test_lyrics(self) -> str:
+        try:
+            return (self._lyrics_text.get("1.0", "end-1c") or "").strip()
+        except Exception:
+            return ""
+
     def _send_test_lyrics(self):
+        """Set text from the Test box (uppercased) and show it."""
         if not callable(self.action_callback):
             return
-        txt = (self._lyrics_var.get() or "").strip().upper()
-
+        txt = self._get_test_lyrics().upper()
         if not txt:
             return
         try:
@@ -523,7 +554,7 @@ class RoleEditorDialog:
     def __init__(self, parent, role, role_index, config, on_save):
         self.parent = parent
         self.role = role or {}
-        self.role_index = role_index
+               self.role_index = role_index
         self.config = config
         self.on_save = on_save
         self.window: Optional[tk.Toplevel] = None
