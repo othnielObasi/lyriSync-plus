@@ -39,11 +39,12 @@ _loop_thread = None
 # -----------------------------
 # Helpers
 # -----------------------------
+
 def soft_wrap(text: str, max_chars: int = 48) -> str:
-    """Wrap into at most 2 lines around max_chars per line (soft wrap by words)."""
+    """Soft-wrap text into up to 2 lines, always uppercase."""
     if not text or max_chars <= 0:
-        return text or ""
-    words = text.strip().split()
+        return (text or "").upper()
+    words = (text.strip().upper()).split()
     if not words:
         return ""
     line1, line2 = "", ""
@@ -55,6 +56,7 @@ def soft_wrap(text: str, max_chars: int = 48) -> str:
             cand2 = (line2 + " " + w).strip() if line2 else w
             line2 = cand2
     return line1 if not line2 else (line1 + "\n" + line2)
+
 
 
 def _submit(coro: Awaitable):
