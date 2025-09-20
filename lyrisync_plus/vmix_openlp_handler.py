@@ -1,5 +1,4 @@
 # vmix_openlp_handler.py
-
 import asyncio
 import json
 import time
