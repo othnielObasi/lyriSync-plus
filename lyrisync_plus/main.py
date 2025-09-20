@@ -1,6 +1,13 @@
 # main.py
-import os
-import sys
+# --- make local modules importable even when bundled ---
+import sys, os
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    APP_DIR = sys._MEIPASS  # type: ignore[attr-defined]
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
+# ------------------------------------------------------
+
 import time
 import argparse
 import threading
