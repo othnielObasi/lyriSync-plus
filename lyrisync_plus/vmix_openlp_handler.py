@@ -1,4 +1,4 @@
-## vmix_openlp_handler.py
+# vmix_openlp_handler.py
 import asyncio
 import json
 import time
@@ -7,12 +7,14 @@ from typing import Callable, Optional, Tuple, Dict, Any, List
 
 import aiohttp
 import websockets
-from websockets.exceptions import ConnectionClosed, InvalidURI
+from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError, InvalidURI
 
 import xml.etree.ElementTree as ET
 
 
-# vMix HTTP API (async)
+# ---------------------
+# vMix Controller (async over HTTP)  -- from Version 2
+# ---------------------
 class VmixController:
     """
     Minimal async vMix controller using the HTTP API at http://host:8088/api
@@ -38,7 +40,6 @@ class VmixController:
         try:
             session = await self._get_session()
             async with session.get(self.api_url) as res:
-                # vMix always returns 200 with XML when OK
                 if res.status != 200:
                     txt = await res.text()
                     print(f"[vMix] API error: HTTP {res.status} {txt[:200]}")
@@ -72,7 +73,7 @@ class VmixController:
 
     async def trigger_overlay(self, overlay_number: int = 1, action: str = "In") -> None:
         try:
-            n = max(1, min(4, int(overlay_number)))
+            n = max(1, min(4, int(overlay_number))))
             action = action if action in {"In", "Out", "On", "Off"} else "In"
             session = await self._get_session()
             params = {"Function": f"OverlayInput{n}{action}"}
@@ -105,7 +106,6 @@ class VmixController:
         root = await self._get_xml()
         if not root:
             return {}
-        # Pull common flags
         status = {
             "recording": (root.findtext("recording") or "").strip(),
             "overlay1": (root.findtext("overlay1") or "").strip(),
@@ -121,48 +121,57 @@ class VmixController:
         self._session = None
 
 
-# OpenLP WebSocket listener (async thread)
+# ---------------------
+# OpenLP Controller (WebSocket with keepalive + backoff)  -- from Version 1
+# ---------------------
 class OpenLPController:
     """
-    Lightweight OpenLP WebSocket client.
-    - Connects to ws://host:4317
-    - Emits callbacks on connect/disconnect/new_lyrics
-    - Reconnects with incremental backoff
+    Connects to OpenLP WebSocket (default ws://host:4317) and emits:
+      - on_connect()
+      - on_disconnect()
+      - on_new_lyrics((text, is_blank))
+    Debounced connect/disconnect reporting; recv timeout keeps loop alive.
     """
 
     def __init__(self, ws_url: str = "ws://localhost:4317"):
         self.ws_url = ws_url
-        self.last_slide: str = ""
-        self.running: bool = False
-
-        # Callbacks
+        self.running = False
         self.on_new_lyrics: Optional[Callable[[Tuple[str, bool]], None]] = None
         self.on_connect: Optional[Callable[[], None]] = None
         self.on_disconnect: Optional[Callable[[], None]] = None
 
-        # Internals
+        self.last_slide: str = ""
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
 
-    # Public control
-    def start(self) -> None:
+        # Status flags (debounce)
+        self._connected_reported = False
+        self._last_disconnect_time = 0.0
+
+        # Fixed backoff schedule (seconds)
+        self._backoff_steps: List[int] = [1, 2, 5, 10, 20]
+        self._backoff_index: int = 0
+
+    def start(self):
         if self.running:
             return
         self.running = True
         self._thread = threading.Thread(target=self._run_async, daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self):
         self.running = False
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._loop:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
 
-    # Internal loop
-    def _run_async(self) -> None:
+    def _run_async(self):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
-            self._loop.run_until_complete(self._listen_ws())
+            self._loop.run_until_complete(self._listen_forever())
         except Exception as e:
             print("[OpenLP] Async loop error:", e)
         finally:
@@ -171,81 +180,90 @@ class OpenLPController:
             except Exception:
                 pass
 
-    async def _listen_ws(self) -> None:
-        backoff = 2  # seconds, grows up to max_backoff
-        max_backoff = 15
+    async def _listen_forever(self):
         while self.running:
             try:
-                async with websockets.connect(self.ws_url, ping_interval=20, ping_timeout=20) as ws:
+                async with websockets.connect(
+                    self.ws_url,
+                    ping_interval=20,
+                    ping_timeout=10,
+                    close_timeout=5,
+                    open_timeout=5,
+                ) as ws:
                     print("[OpenLP] Connected to WebSocket")
-                    if callable(self.on_connect):
-                        try:
-                            self.on_connect()
-                        except Exception:
-                            pass
+                    self._report_connected()
+                    self._backoff_index = 0  # reset backoff after good connect
 
-                    backoff = 2  # reset after successful connect
-
+                    # Recv loop with timeout to keep task alive even if no messages
                     while self.running:
                         try:
-                            msg = await ws.recv()
-                        except ConnectionClosed:
-                            print("[OpenLP] Connection closed")
-                            break
-                        except Exception as e:
-                            print("[OpenLP] Receive error:", e)
-                            break
+                            msg = await asyncio.wait_for(ws.recv(), timeout=60)
+                        except asyncio.TimeoutError:
+                            continue  # periodic timeout; confirm connection via ping
                         await self._process_message(msg)
 
+            except (ConnectionClosedOK, ConnectionClosedError) as e:
+                print(f"[OpenLP] Connection closed: {getattr(e, 'code', '')} {getattr(e, 'reason', '')}")
             except InvalidURI:
                 print("[OpenLP] Invalid WS URL:", self.ws_url)
-                await asyncio.sleep(5)
             except Exception as e:
                 print("[OpenLP] WebSocket error:", e)
 
-            # Notify disconnect
-            if callable(self.on_disconnect):
-                try:
-                    self.on_disconnect()
-                except Exception:
-                    pass
+            self._report_disconnected()
 
             if self.running:
-                await asyncio.sleep(backoff)
-                backoff = min(max_backoff, backoff * 2)
+                delay = self._backoff_steps[min(self._backoff_index, len(self._backoff_steps) - 1)]
+                self._backoff_index = min(self._backoff_index + 1, len(self._backoff_steps) - 1)
+                await asyncio.sleep(delay)
 
-    async def _process_message(self, message: Any) -> None:
-        """
-        Expect messages like:
-          {"text": "...", "type": "...", "action": "..."}
-        Blank detection:
-          - empty/whitespace text
-          - type/action in {"blank","clear"}
-        """
+    async def _process_message(self, message: Any):
         text = ""
         is_blank = False
-
         try:
+            # decode bytes if necessary
+            if isinstance(message, (bytes, bytearray)):
+                message = message.decode("utf-8", errors="ignore")
             data = json.loads(message) if isinstance(message, str) else {}
         except Exception:
             data = {}
 
         if isinstance(data, dict):
             text = str(data.get("text", "") or "")
-            if not text.strip():
-                is_blank = True
-
             typ = str(data.get("type", "")).lower()
             act = str(data.get("action", "")).lower()
+            if not text.strip():
+                is_blank = True
             if typ in {"blank", "clear"} or act in {"blank", "clear"}:
                 is_blank = True
+        else:
+            text = str(message or "")
+            is_blank = (text.strip() == "")
 
         self.last_slide = text
         print(f"[OpenLP] Message → blank={is_blank} text={text!r}")
 
-        cb = self.on_new_lyrics
-        if callable(cb):
+        if callable(self.on_new_lyrics):
             try:
-                cb((text, is_blank))
+                self.on_new_lyrics((text, is_blank))
             except Exception as e:
                 print("[OpenLP] on_new_lyrics error:", e)
+
+    # ---- Debounced status reporting ----
+    def _report_connected(self):
+        if not self._connected_reported:
+            self._connected_reported = True
+            try:
+                if callable(self.on_connect):
+                    self.on_connect()
+            except Exception:
+                pass
+
+    def _report_disconnected(self):
+        self._last_disconnect_time = time.time()
+        if self._connected_reported:
+            self._connected_reported = False
+            try:
+                if callable(self.on_disconnect):
+                    self.on_disconnect()
+            except Exception:
+                pass
